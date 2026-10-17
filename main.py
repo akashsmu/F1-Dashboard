@@ -1,0 +1,252 @@
+from src.f1_data import get_race_telemetry, enable_cache, get_circuit_rotation, load_session, get_quali_telemetry, get_practice_telemetry, list_rounds, list_sprints, _get_current_championship_standings, get_live_standings
+from src.run_session import run_arcade_replay, launch_insights_menu, launch_telemetry_viewer
+from src.interfaces.qualifying import run_qualifying_replay
+from src.interfaces.practice import run_practice_replay
+import sys
+from src.cli.race_selection import cli_load
+from src.gui.race_selection import RaceSelectionWindow
+from PySide6.QtWidgets import QApplication
+from src.lib.season import get_season
+import logging
+import re
+
+
+def _extract_circuit_name(event_name: str) -> str:
+    """
+    Extract a reasonable circuit/location name from the F1 event name.
+    Removes common suffixes like 'Grand Prix', 'GP', etc.
+    """
+    if not event_name:
+        return ""
+
+    # Remove common F1 event suffixes
+    suffixes_to_remove = [
+        r'\s+Grand\s+Prix$',
+        r'\s+GP$',
+        r'\s+Grand\s+Prix\s+$',
+        r'\s+GP\s+$',
+    ]
+
+    circuit_name = event_name
+    for suffix in suffixes_to_remove:
+        circuit_name = re.sub(suffix, '', circuit_name, flags=re.IGNORECASE)
+
+    # Trim any extra whitespace
+    circuit_name = circuit_name.strip()
+
+    # If we ended up with an empty string, fall back to the original
+    if not circuit_name:
+        circuit_name = event_name
+
+    return circuit_name
+
+
+def main(year=None, round_number=None, playback_speed=1, session_type='R', visible_hud=True, ready_file=None, show_telemetry_viewer=True):
+  print(f"Loading F1 {year} Round {round_number} Session '{session_type}'")
+  session = load_session(year, round_number, session_type)
+  if session is None:
+    print(f"Unable to load session '{session_type}'.")
+    return
+
+  print(f"Loaded session: {session.event['EventName']} - {session.event['RoundNumber']} - {session_type}")
+
+  # Enable cache for fastf1
+  enable_cache()
+
+  if session_type == 'Q' or session_type == 'SQ':
+
+    # Get the drivers who participated and their lap times
+
+    qualifying_session_data = get_quali_telemetry(session, session_type=session_type)
+
+    # Run the arcade screen showing qualifying results
+
+    title = f"{session.event['EventName']} - {'Sprint Qualifying' if session_type == 'SQ' else 'Qualifying Results'}"
+
+    run_qualifying_replay(
+      session=session,
+      data=qualifying_session_data,
+      title=title,
+      ready_file=ready_file,
+    )
+
+  elif session_type in ['FP1', 'FP2', 'FP3']:
+    # Get the drivers who participated and their lap times
+    practice_session_data = get_practice_telemetry(session, session_type=session_type)
+
+    # Run the arcade screen showing practice results
+    title = f"{session.event['EventName']} - {session_type} Practice"
+
+    run_practice_replay(
+      session=session,
+      data=practice_session_data,
+      title=title,
+      ready_file=ready_file,
+    )
+
+  else:
+
+    # Get the drivers who participated in the race
+
+    race_telemetry = get_race_telemetry(session, session_type=session_type)
+
+    # Get example lap for track layout
+    # Qualifying lap preferred for DRS zones (fallback to fastest race lap (no DRS data))
+    example_lap = None
+
+    try:
+        print("Attempting to load qualifying session for track layout...")
+        quali_session = load_session(year, round_number, 'Q')
+        if quali_session is not None and len(quali_session.laps) > 0:
+            fastest_quali = quali_session.laps.pick_fastest()
+            if fastest_quali is not None:
+                quali_telemetry = fastest_quali.get_telemetry()
+                if 'DRS' in quali_telemetry.columns:
+                    example_lap = quali_telemetry
+                    print(f"Using qualifying lap from driver {fastest_quali['Driver']} for DRS Zones")
+    except Exception as e:
+        print(f"Could not load qualifying session: {e}")
+
+    # fallback: Use fastest race lap
+    if example_lap is None:
+        fastest_lap = session.laps.pick_fastest()
+        if fastest_lap is not None:
+            example_lap = fastest_lap.get_telemetry()
+            print("Using fastest race lap (DRS detection may use speed-based fallback)")
+        else:
+            print("Error: No valid laps found in session")
+            return
+
+    drivers = session.drivers
+
+    # Get circuit rotation
+
+    circuit_rotation = get_circuit_rotation(session)
+
+    # Prepare session info for display banner
+    event_name = session.event.get('EventName', '')
+    circuit_name = _extract_circuit_name(event_name)
+
+    session_info = {
+        'event_name': event_name,
+        'circuit_name': circuit_name,
+        'country': session.event.get('Country', ''),
+        'year': year,
+        'round': round_number,
+        'date': session.event.get('EventDate', '').strftime('%B %d, %Y') if session.event.get('EventDate') else '',
+        'total_laps': race_telemetry['total_laps'],
+        'circuit_length_m': float(example_lap["Distance"].max()) if example_lap is not None and "Distance" in example_lap else None,
+    }
+
+    # Get championship standings before race
+    current_driver_standings, current_constructors_standings = _get_current_championship_standings(session)
+
+    # Compute standings per lap
+    live_driver_standings, live_constructors_standings = get_live_standings(current_driver_standings, current_constructors_standings, session)
+
+    # Launch telemetry viewer if requested
+    if show_telemetry_viewer:
+      launch_telemetry_viewer()
+      print("Launching telemetry stream viewer...")
+    # Launch insights menu (always shown with replay)
+    launch_insights_menu()
+    print("Launching insights menu...")
+
+    # Run the arcade replay
+
+    run_arcade_replay(
+      frames=race_telemetry['frames'],
+      track_statuses=race_telemetry['track_statuses'],
+      example_lap=example_lap,
+      drivers=drivers,
+      playback_speed=playback_speed,
+      driver_colors=race_telemetry['driver_colors'],
+      title=f"{session.event['EventName']} - {'Sprint' if session_type == 'S' else 'Race'}",
+      total_laps=race_telemetry['total_laps'],
+      circuit_rotation=circuit_rotation,
+      visible_hud=visible_hud,
+      ready_file=ready_file,
+      session_info=session_info,
+      session=session,
+      current_driver_standings=current_driver_standings,
+      current_constructors_standings=current_constructors_standings,
+      live_driver_standings=live_driver_standings,
+      live_constructors_standings=live_constructors_standings,
+      enable_telemetry=True,
+      race_control_messages=race_telemetry.get('race_control_messages', [])
+    )
+
+if __name__ == "__main__":
+
+  if "--verbose" not in sys.argv:# fastf1 logging is disabled by default
+    logging.getLogger("fastf1").setLevel(logging.CRITICAL)
+
+  if "--cli" in sys.argv:
+    # Run the CLI
+    cli_load()
+    sys.exit(0)
+
+  if "--year" in sys.argv:
+    year_index = sys.argv.index("--year") + 1
+    year = int(sys.argv[year_index])
+  else:
+    year = get_season()  # Default year
+
+  if "--round" in sys.argv:
+    round_index = sys.argv.index("--round") + 1
+    round_number = int(sys.argv[round_index])
+  else:
+    round_number = 12  # Default round number
+
+  visible_hud = "--no-hud" not in sys.argv
+
+  if "--list-rounds" in sys.argv:
+    list_rounds(year)
+  elif "--list-sprints" in sys.argv:
+    list_sprints(year)
+
+  if "--playback-speed" in sys.argv:
+    speed_index = sys.argv.index("--playback-speed") + 1
+    playback_speed = float(sys.argv[speed_index])
+  else:
+    playback_speed = 1.0  # Default playback speed
+
+
+  if "--viewer" in sys.argv:
+    
+    visible_hud = True
+    if "--no-hud" in sys.argv:
+      visible_hud = False
+
+    # Session type selection
+    if "--sprint-qualifying" in sys.argv:
+      session_type = 'SQ'
+    elif "--sprint" in sys.argv:
+      session_type = 'S'
+    elif "--qualifying" in sys.argv:
+      session_type = 'Q'
+    elif "--fp1" in sys.argv:
+      session_type = 'FP1'
+    elif "--fp2" in sys.argv:
+      session_type = 'FP2'
+    elif "--fp3" in sys.argv:
+      session_type = 'FP3'
+    else:
+      session_type = 'R'
+
+    # Optional ready-file path used when spawned from the GUI to signal ready state
+    ready_file = None
+    if "--ready-file" in sys.argv:
+      idx = sys.argv.index("--ready-file") + 1
+      if idx < len(sys.argv):
+        ready_file = sys.argv[idx]
+
+    main(year, round_number, playback_speed, session_type=session_type, visible_hud=visible_hud, ready_file=ready_file)
+    sys.exit(0)
+
+  # Run the GUI
+
+  app = QApplication(sys.argv)
+  win = RaceSelectionWindow()
+  win.show()
+  sys.exit(app.exec())

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import src.f1_data; import src.interfaces.race_replay\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('src/f1_data.py'\\).read\\(\\)\\); ast.parse\\(open\\('src/interfaces/race_replay.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")"
+    ]
+  }
+}
