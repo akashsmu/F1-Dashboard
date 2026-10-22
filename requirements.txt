@@ -7,3 +7,6 @@ pyglet
 pyside6
 questionary
 rich
+fastapi
+uvicorn[standard]
+websockets

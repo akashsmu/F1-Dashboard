@@ -21,6 +21,7 @@ from src.ui_components import (
 )
 from src.tyre_degradation_integration import TyreDegradationIntegrator
 from src.services.stream import TelemetryStreamServer
+from src.services.websocket_server import F1WebSocketServer
 
 
 SCREEN_WIDTH = 1280
@@ -39,6 +40,7 @@ class F1RaceReplayWindow(arcade.Window):
         self.maximize()
 
         self.telemetry_stream = None
+        self.ws_server = None
         if enable_telemetry:
             try:
                 self.telemetry_stream = TelemetryStreamServer()
@@ -51,6 +53,13 @@ class F1RaceReplayWindow(arcade.Window):
             except Exception as e:
                 print(f"Error starting telemetry server: {e}")
                 self.telemetry_stream = None
+
+            try:
+                self.ws_server = F1WebSocketServer(host="0.0.0.0", port=8765)
+                self.ws_server.start()
+            except Exception as e:
+                print(f"Failed to start WebSocket server: {e}")
+                self.ws_server = None
 
         self.frames = frames
         self.current_driver_standings = current_driver_standings or {} # current championship standings at time of replay (for overlay)
@@ -380,6 +389,8 @@ class F1RaceReplayWindow(arcade.Window):
         payload["status_laps"] = self._precomputed_status_laps
 
         self.telemetry_stream.broadcast(payload)
+        if self.ws_server:
+            self.ws_server.broadcast(payload)
 
     @staticmethod
     def _compute_lap_times(frames, session=None):
@@ -1781,4 +1792,6 @@ class F1RaceReplayWindow(arcade.Window):
         if hasattr(self, 'telemetry_stream') and self.telemetry_stream:
             print("Stopping telemetry stream server...")
             self.telemetry_stream.stop()
+        if hasattr(self, 'ws_server') and self.ws_server:
+            self.ws_server.stop()
         super().close()

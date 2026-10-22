@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F1 Pit Wall</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a1a;
+      --border: #2e2e2e;
+      --accent: #e10600;   /* F1 red */
+      --text: #f0f0f0;
+      --muted: #888;
+      --tab-h: 44px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      font-size: 14px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 2px solid var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      height: var(--tab-h);
+      flex-shrink: 0;
+    }
+    header .logo {
+      font-weight: 800;
+      font-size: 16px;
+      letter-spacing: .04em;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+    header .session-name {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #status-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+    #status-dot.live { background: #0f0; animation: pulse 1.4s infinite; }
+    @keyframes pulse {
+      0%,100% { opacity:1; } 50% { opacity:.3; }
+    }
+
+    /* ── Tab bar ── */
+    nav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 2px;
+      padding: 0 8px;
+      overflow-x: auto;
+      flex-shrink: 0;
+    }
+    nav button {
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 14px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      white-space: nowrap;
+      transition: color .15s, border-color .15s;
+    }
+    nav button:hover { color: var(--text); }
+    nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    /* ── Panel container ── */
+    #panel-wrap {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+    iframe {
+      display: none;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: var(--bg);
+    }
+    iframe.active { display: block; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">F1 Pit Wall</span>
+  <span class="session-name" id="session-label">—</span>
+  <div style="flex:1"></div>
+  <span id="status-dot" title="WebSocket status"></span>
+</header>
+
+<nav id="tabs"></nav>
+
+<div id="panel-wrap" id="panels"></div>
+
+<script src="/js/session.js"></script>
+<script src="/js/stream.js"></script>
+<script>
+  const PANELS = [
+    { id: "leaderboard",       label: "Leaderboard",    src: "/panels/leaderboard.html" },
+    { id: "track3d",           label: "3D Track",        src: "/panels/track3d.html" },
+    { id: "tyre_strategy",     label: "Tyres",           src: "/panels/tyre_strategy.html" },
+    { id: "pitstop_timeline",  label: "Pitstops",        src: "/panels/pitstop_timeline.html" },
+    { id: "driver_telemetry",  label: "Telemetry",       src: "/panels/driver_telemetry.html" },
+    { id: "race_control",      label: "Race Control",    src: "/panels/race_control.html" },
+    { id: "incident_feed",     label: "Incidents",       src: "/panels/incident_feed.html" },
+    { id: "pit_wall_radio",    label: "Team Radio",      src: "/panels/pit_wall_radio.html" },
+    { id: "sector_times",      label: "Sectors",         src: "/panels/sector_times.html" },
+    { id: "weather",           label: "Weather",         src: "/panels/weather.html" },
+    { id: "practice_pace",     label: "Practice Pace",   src: "/panels/practice_pace.html" },
+  ];
+
+  const nav   = document.getElementById("tabs");
+  const wrap  = document.getElementById("panel-wrap");
+  const dot   = document.getElementById("status-dot");
+  const label = document.getElementById("session-label");
+
+  // Build tabs + iframes
+  PANELS.forEach(({ id, label: lbl, src }, i) => {
+    const btn = document.createElement("button");
+    btn.textContent = lbl;
+    btn.dataset.id = id;
+    if (i === 0) btn.classList.add("active");
+    btn.addEventListener("click", () => activate(id));
+    nav.appendChild(btn);
+
+    const frame = document.createElement("iframe");
+    frame.id = `frame-${id}`;
+    frame.src = src;
+    if (i === 0) frame.classList.add("active");
+    wrap.appendChild(frame);
+  });
+
+  function activate(id) {
+    document.querySelectorAll("nav button").forEach(b =>
+      b.classList.toggle("active", b.dataset.id === id)
+    );
+    document.querySelectorAll("iframe").forEach(f =>
+      f.classList.toggle("active", f.id === `frame-${id}`)
+    );
+  }
+
+  // Session info → update header label
+  window.addEventListener("f1SessionInfoReady", (e) => {
+    const info = e.detail;
+    if (info.event_name) {
+      label.textContent = `${info.year ?? ""} ${info.event_name}`.trim();
+    }
+  });
+
+  // Connection status dot
+  const bc = new BroadcastChannel("f1frames");
+  bc.onmessage = (e) => {
+    if (e.data?._meta === "connected")    { dot.classList.add("live"); }
+    if (e.data?._meta === "disconnected") { dot.classList.remove("live"); }
+  };
+</script>
+</body>
+</html>
